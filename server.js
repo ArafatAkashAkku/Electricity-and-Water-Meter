@@ -1,4 +1,4 @@
-// DESCO + NESCO prepaid meters and Dhaka + Chattogram WASA bills — one site, zero dependencies.
+// DESCO, NESCO and DPDC electricity plus Dhaka and Chattogram WASA bills — one site, zero dependencies.
 // Run: node server.js   then open http://localhost:3002
 
 const http = require('http');
@@ -26,7 +26,10 @@ function request(url, { method = 'GET', headers = {}, body, timeout = 20000 } = 
     const req = client.request(url, { method, headers: { 'User-Agent': UA, ...headers }, ca: CA, timeout }, (res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
-      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
+      res.on('end', () => {
+        const buffer = Buffer.concat(chunks);
+        resolve({ status: res.statusCode, headers: res.headers, buffer, body: buffer.toString('utf8') });
+      });
     });
     req.on('timeout', () => req.destroy(new Error('Upstream timed out')));
     req.on('error', reject);
@@ -253,6 +256,119 @@ async function lookupNesco(no) {
   };
 }
 
+// ----------------------------------------------------------------- DPDC ----
+// https://dpdc.org.bd/site/service/myPrepaidToken_gov is DPDC's public page for a
+// customer's last prepaid recharge. It is protected by a captcha, so the page shows
+// that captcha to the person and forwards their answer. It does not offer a balance.
+
+const DPDC_PAGE = 'https://dpdc.org.bd/site/service/myPrepaidToken_gov';
+const DPDC_CAPTCHA_MS = 5 * 60 * 1000;
+const dpdcCaptchas = new Map(); // one-use token -> the session that captcha belongs to
+
+const sessionCookie = (res) => (res.headers['set-cookie'] || []).map((c) => c.split(';')[0]).join('; ');
+
+async function dpdcCaptcha() {
+  const page = await request(DPDC_PAGE);
+  const src = (page.body.match(/id="captcha_img"\s+src="([^"]+)"/) || [])[1];
+  const cookie = sessionCookie(page);
+  if (page.status !== 200 || !src) throw new Error('Could not open the DPDC page');
+
+  const image = await request(new URL(decode(src), DPDC_PAGE).href, { headers: { Cookie: cookie } });
+  if (image.status !== 200) throw new Error('Could not load the DPDC security code');
+
+  for (const [t, c] of dpdcCaptchas) if (c.expires < Date.now()) dpdcCaptchas.delete(t);
+  const captcha = crypto.randomBytes(24).toString('hex');
+  dpdcCaptchas.set(captcha, { cookie, expires: Date.now() + DPDC_CAPTCHA_MS });
+  return { captcha, image: `data:${image.headers['content-type'] || 'image/png'};base64,${image.buffer.toString('base64')}` };
+}
+
+// The layout of a successful answer is read generically: "Label: value" text and
+// two-cell rows become fields, wider rows become tables, and anything else is kept
+// as a note so no detail DPDC returns is dropped.
+function parseDpdc(html) {
+  const fields = {};
+  const tables = [];
+  const notes = [];
+  let run = null;
+  const labelled = (s) => {
+    const m = s.match(/^([A-Za-zঀ-৿][^:#]{1,39}?)\s*[:#]\s*(.+)$/);
+    if (m && !(m[1] in fields)) fields[m[1]] = m[2];
+    return !!m;
+  };
+  for (const row of html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const cells = [...row[1].matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((c) => text(c[1])).filter(Boolean);
+    const rest = cells.filter((c) => !labelled(c));
+    if (rest.length === 2 && cells.length === 2) {
+      fields[rest[0]] = rest[1].replace(/^:\s*/, '');
+      run = null;
+    } else if (rest.length > 2) {
+      if (!run || run[0].length !== rest.length) tables.push((run = []));
+      run.push(rest);
+    } else {
+      notes.push(...rest);
+    }
+  }
+  for (const line of html.replace(/<table[\s\S]*?<\/table>/gi, '').split(/<br\s*\/?>|<\/p>|<\/div>|<\/li>/i)) {
+    const value = text(line);
+    if (value && !labelled(value)) notes.push(value);
+  }
+  return { fields, tables, notes };
+}
+
+async function lookupDpdc(no, code, captcha) {
+  const session = dpdcCaptchas.get(captcha);
+  dpdcCaptchas.delete(captcha);
+  if (!session || session.expires < Date.now()) throw new Error('The security code expired — enter the new one');
+
+  const form = new URLSearchParams({ cno: no, security_code: code }).toString();
+  const res = await request(DPDC_PAGE, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+      'Content-Length': Buffer.byteLength(form),
+      'X-Requested-With': 'XMLHttpRequest',
+      Cookie: session.cookie,
+      Referer: DPDC_PAGE,
+    },
+    body: form,
+  });
+  let answer;
+  try {
+    answer = JSON.parse(res.body);
+  } catch {
+    throw new Error(`DPDC returned an unexpected response (HTTP ${res.status})`);
+  }
+  const html = decode(answer.result || '');
+  if (!answer.isSuccess) throw new Error(answer.message || text(html) || 'DPDC could not find that customer');
+
+  const { fields: f, tables, notes } = parseDpdc(html);
+  const take = (re) => {
+    const key = Object.keys(f).find((k) => re.test(k));
+    if (!key) return '';
+    const value = f[key];
+    delete f[key];
+    return value;
+  };
+  const name = take(/name/i);
+  const address = take(/address/i);
+  const meterNo = take(/meter/i);
+  // A total first: DPDC also lists parts of a recharge, and those stay in the details.
+  const amountKey = [/total|recharge|vend(ing)?\s*amount|paid/i, /amount|taka|\btk\b/i].map((re) => Object.keys(f).find((k) => re.test(k))).find(Boolean);
+  const balance = amountKey ? f[amountKey] : '';
+  return {
+    provider: 'DPDC',
+    name,
+    address,
+    accountNo: no,
+    meterNo,
+    balance,
+    balanceLabel: amountKey || 'Last recharge',
+    details: clean(f),
+    tables,
+    summary: notes.join(' · '),
+  };
+}
+
 // ------------------------------------------------------ Chattogram WASA ----
 // http://ebill.cwasabd.org/ebill/ is public. The bill is a Crystal Reports page:
 // absolutely positioned divs inside a JS string, printed twice (CWASA copy and
@@ -299,7 +415,6 @@ async function lookupCwasa(no, month) {
 
     return {
       provider: 'CWASA',
-      postpaid: true,
       name: get('NAME'),
       address: get('ADDRESS'),
       phone: get('CONTACT'),
@@ -474,7 +589,6 @@ async function lookupDwasa(no, password) {
   const value = (re) => f[Object.keys(f).find((k) => re.test(k))] || '';
   const profile = {
     provider: 'DWASA',
-    postpaid: true,
     name: value(/^(consumer )?name$/i),
     address: value(/^address$/i),
     phone: value(/^cell no/i),
@@ -557,6 +671,25 @@ http
       if (!account) return send(res, 400, 'application/json', JSON.stringify({ error: 'Missing account number' }));
       try {
         return send(res, 200, 'application/json', JSON.stringify(await descoRecharges(account, meter)));
+      } catch (e) {
+        return send(res, 502, 'application/json', JSON.stringify({ error: e.message }));
+      }
+    }
+
+    if (url.pathname === '/api/dpdc/captcha') {
+      try {
+        return send(res, 200, 'application/json', JSON.stringify(await dpdcCaptcha()));
+      } catch (e) {
+        return send(res, 502, 'application/json', JSON.stringify({ error: e.message }));
+      }
+    }
+
+    if (url.pathname === '/api/dpdc' && req.method === 'POST') {
+      const { no, code, captcha } = await readJson(req).catch(() => ({}));
+      if (!/^\d{8}$/.test(no || '')) return send(res, 400, 'application/json', JSON.stringify({ error: 'Enter the 8-digit customer number' }));
+      if (!code || !captcha) return send(res, 400, 'application/json', JSON.stringify({ error: 'Enter the security code from the image' }));
+      try {
+        return send(res, 200, 'application/json', JSON.stringify(await lookupDpdc(no, String(code), String(captcha))));
       } catch (e) {
         return send(res, 502, 'application/json', JSON.stringify({ error: e.message }));
       }

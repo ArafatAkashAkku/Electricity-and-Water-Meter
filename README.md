@@ -6,10 +6,11 @@ One page to check Bangladesh electricity and water accounts instead of visiting 
 | --- | --- | --- | --- |
 | DESCO | Prepaid electricity | Account or meter number | Balance, customer details, 6 months of recharges, 12 months of usage |
 | NESCO | Prepaid electricity | Customer or meter number | Balance, customer details, recharge history |
+| DPDC | Prepaid electricity | 8-digit customer number and a security code from an image | Last recharge and its token, not the balance |
 | Dhaka WASA | Postpaid water | Account number and portal password | Customer details, latest bill, bill statement with From/To dates |
 | Chattogram WASA | Postpaid water | Account number, optional year and month | Bill with net payable, due date, readings, VAT, surcharges and arrears |
 
-Accounts you check are kept in a Saved meters list in your browser, with a Refresh all button. Dhaka WASA accounts are not saved, because they need a password each time.
+Accounts you check are kept in a Saved meters list in your browser, with a Refresh all button. DPDC and Dhaka WASA accounts are not saved, because they need a security code or password each time.
 
 ## Run it
 
@@ -54,6 +55,7 @@ None of these are public APIs for third parties. The site uses the same pages an
 | --- | --- | --- |
 | DESCO | `prepaid.desco.org.bd` | JSON API used by the DESCO site |
 | NESCO | `customer.nesco.gov.bd/pre/panel` | Submits the web form and reads the result page |
+| DPDC | `dpdc.org.bd/site/service/myPrepaidToken_gov` | Shows DPDC's security code, then submits the person's answer to the page |
 | Dhaka WASA | `consumer-portal.dhakawasa.org` | Logs in with the customer's details, submits the date search and reads the statement |
 | Chattogram WASA | `ebill.cwasabd.org/ebill` | Fetches the public bill page and reads values by their position on it |
 
@@ -64,6 +66,8 @@ None of these are public APIs for third parties. The site uses the same pages an
 | GET | `/api/desco` | `no` |
 | GET | `/api/desco/recharges` | `account`, `meter` |
 | GET | `/api/nesco` | `no` |
+| GET | `/api/dpdc/captcha` | None. Returns `captcha` and `image` |
+| POST | `/api/dpdc` | JSON: `no`, `code`, `captcha` |
 | GET | `/api/cwasa` | `no`, optional `month` as `YYYY-MM` |
 | POST | `/api/dwasa` | JSON: `no`, `password` |
 | POST | `/api/dwasa/statement` | JSON: `session`, `from`, `to` as `YYYY-MM-DD` |
@@ -75,7 +79,8 @@ None of these are public APIs for third parties. The site uses the same pages an
 - **Certificates:** DESCO and Dhaka WASA don't send their full certificate chains, which Node rejects. The server loads every `.pem` file in `certs/` to complete them. Certificate checking stays on. Don't set `rejectUnauthorized: false`.
 - **Dhaka WASA amount:** the large amount is the latest bill's total, not the total owed across all bills.
 - **Chattogram WASA amount:** arrears are shown separately and are not included in net payable.
-- **Page changes:** NESCO, Dhaka WASA and Chattogram WASA are read from web pages, so a change to those pages can break a lookup.
+- **DPDC:** the public page gives the last recharge only. The balance needs a login on a portal that only supports `http`, so it isn't included. A person must answer the security code for each check, and each code works once.
+- **Page changes:** NESCO, DPDC, Dhaka WASA and Chattogram WASA are read from web pages, so a change to those pages can break a lookup.
 
 ## Security
 
