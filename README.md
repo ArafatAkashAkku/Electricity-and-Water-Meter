@@ -8,6 +8,7 @@ One page to check Bangladesh electricity and water accounts instead of visiting 
 | NESCO | Prepaid electricity | Customer or meter number | Balance, customer details, recharge history |
 | DPDC | Prepaid electricity | 8-digit customer number and a security code from an image | Last recharge and its token, not the balance |
 | BPDB | Prepaid electricity | 12-digit meter number | Customer details and recharge tokens from the public token check |
+| WZPDCL | Postpaid electricity | Account number | Latest bill: name, meter, tariff, readings, charges and payable amount |
 | Dhaka WASA | Postpaid water | Account number and portal password | Customer details, latest bill, bill statement with From/To dates |
 | Chattogram WASA | Postpaid water | Account number, optional year and month | Bill with net payable, due date, readings, VAT, surcharges and arrears |
 
@@ -39,6 +40,7 @@ Use these numbers to try each tab. They are live records, so results show real, 
 | NESCO           | `81900908`                   |
 | DPDC            | `21880606`                   |
 | BPDB            | `010210936305`               |
+| WZPDCL          | `308140914`                  |
 | Dhaka WASA      | `0108080691` (Password Same) |
 | Chattogram WASA | `121020`                     |
 
@@ -60,6 +62,7 @@ None of these are public APIs for third parties. The site uses the same pages an
 | NESCO | `customer.nesco.gov.bd/pre/panel` | Submits the web form and reads the result page |
 | DPDC | `dpdc.org.bd/site/service/myPrepaidToken_gov` | Shows DPDC's security code, then submits the person's answer to the page |
 | BPDB | `web.bpdbprepaid.gov.bd/bn/token-check` | Calls the page's public lookup the way the site does; the lookup id is read from the page at runtime |
+| WZPDCL | `ebill.wzpdcl.gov.bd` | Public Oracle APEX page; the server reproduces its signed submit (session tokens and per-item checksums read from the page) |
 | Dhaka WASA | `consumer-portal.dhakawasa.org` | Logs in with the customer's details, submits the date search and reads the statement |
 | Chattogram WASA | `ebill.cwasabd.org/ebill` | Fetches the public bill page and reads values by their position on it |
 
@@ -73,6 +76,7 @@ None of these are public APIs for third parties. The site uses the same pages an
 | GET | `/api/dpdc/captcha` | None. Returns `captcha` and `image` |
 | POST | `/api/dpdc` | JSON: `no`, `code`, `captcha` |
 | GET | `/api/bpdb` | `no` (12-digit meter number) |
+| GET | `/api/wzpdcl` | `no` (account number) |
 | GET | `/api/cwasa` | `no`, optional `month` as `YYYY-MM` |
 | POST | `/api/dwasa` | JSON: `no`, `password` |
 | POST | `/api/dwasa/statement` | JSON: `session`, `from`, `to` as `YYYY-MM-DD` |
@@ -86,7 +90,8 @@ None of these are public APIs for third parties. The site uses the same pages an
 - **Chattogram WASA amount:** arrears are shown separately and are not included in net payable.
 - **BPDB:** the lookup is a Next.js server action whose id changes each time BPDB redeploys their site. The server reads the current id from the page at runtime and re-reads it if it goes stale, so it keeps working across their deploys but depends on the page's structure.
 - **DPDC:** the public page gives the last recharge only. The balance needs a login on a portal that only supports `http`, so it isn't included. A person must answer the security code for each check, and each code works once.
-- **Page changes:** NESCO, DPDC, BPDB, Dhaka WASA and Chattogram WASA are read from web pages, so a change to those pages can break a lookup.
+- **WZPDCL:** served by an Oracle APEX app that signs every submit with per-session checksums. The server reads those from the page for each lookup, so it keeps working, but depends closely on the page's structure and will break if WZPDCL changes their APEX app.
+- **Page changes:** NESCO, DPDC, BPDB, WZPDCL, Dhaka WASA and Chattogram WASA are read from web pages, so a change to those pages can break a lookup.
 
 ## Security
 

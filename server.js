@@ -150,6 +150,7 @@ const decode = (s) =>
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#0?39;/g, "'")
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n));
 const num = (s) => parseFloat(String(s).replace(/[^\d.-]/g, '')) || 0;
 const text = (html) =>decode(html.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
@@ -770,6 +771,132 @@ async function lookupBpdb(no) {
   };
 }
 
+// --------------------------------------------------------------- WZPDCL ----
+// https://ebill.wzpdcl.gov.bd:8443/ords/f?p=1009:1009 is a public Oracle APEX page.
+// Its search is a signed APEX submit: GET the page for a fresh session (instance,
+// salt, the page-item protection blob and a per-item checksum "ck" for each
+// protected item), POST wwv_flow.accept with every item in order, then follow the
+// redirect to the page APEX re-renders with the bill filled in.
+
+const WZPDCL_BASE = 'https://ebill.wzpdcl.gov.bd:8443/ords';
+const WZPDCL_PAGE = `${WZPDCL_BASE}/f?p=1009:1009`;
+
+const inputVal = (tag) => {
+  const m = tag.match(/value="([^"]*)"/) || tag.match(/value='([^']*)'/);
+  return m ? decode(m[1]) : '';
+};
+const findInput = (html, attr) => {
+  const m = html.match(new RegExp(`<input[^>]*${attr}[^>]*>`, 'i'));
+  return m ? inputVal(m[0]) : '';
+};
+
+function wzpdclItems(html, accountNo) {
+  // Per-item protection tokens: <input data-for="P1009_X" value="<ck>">
+  const ck = {};
+  for (const m of html.matchAll(/<input[^>]*data-for="(P1009_[A-Z0-9_]+)"[^>]*>/gi)) ck[m[1]] = inputVal(m[0]);
+  // Every named page item, in document order, with its rendered value.
+  const items = [];
+  for (const m of html.matchAll(/<input[^>]*name="(P1009_[A-Z0-9_]+)"[^>]*>/gi)) {
+    const name = m[1];
+    const item = { n: name, v: name === 'P1009_ACCNO' ? accountNo : inputVal(m[0]) };
+    if (ck[name]) item.ck = ck[name];
+    items.push(item);
+  }
+  return items;
+}
+
+// The page also carries a "Ledger Web-Print" report: a t-Report table of past bills.
+function wzpdclLedger(html) {
+  const columns = [...html.matchAll(/<th[^>]*class="t-Report-colHead"[^>]*>([\s\S]*?)<\/th>/gi)].map((m) => text(m[1]));
+  if (!columns.length) return [];
+  const rows = [];
+  for (const tr of html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const cells = [...tr[1].matchAll(/<td[^>]*class="t-Report-cell"[^>]*>([\s\S]*?)<\/td>/gi)].map((c) => text(c[1]) || '-');
+    if (cells.length) rows.push(cells);
+  }
+  return rows.length ? [[columns, ...rows.slice(0, 36)]] : [];
+}
+
+async function lookupWzpdcl(accountNo) {
+  const page = await request(WZPDCL_PAGE);
+  if (page.status !== 200) throw new Error(`WZPDCL returned HTTP ${page.status}`);
+  const cookie = (page.headers['set-cookie'] || []).map((c) => c.split(';')[0]).join('; ');
+  const instance = findInput(page.body, 'name="p_instance"');
+  const salt = findInput(page.body, 'name="p_page_submission_id"');
+  const protectedBlob = findInput(page.body, 'id="pPageItemsProtected"');
+  const ctx = (page.body.match(/wwv_flow\.accept\?p_context=([^"]+)"/) || [])[1];
+  if (!instance || !salt || !ctx) throw new Error('Could not open the WZPDCL page');
+
+  const pJson = JSON.stringify({
+    pageItems: { itemsToSubmit: wzpdclItems(page.body, accountNo), protected: protectedBlob, rowVersion: '', formRegionChecksums: [] },
+    salt,
+  });
+  const form = [
+    ['p_flow_id', '1009'], ['p_flow_step_id', '1009'], ['p_instance', instance], ['p_debug', ''],
+    ['p_request', 'SEARCH'], ['p_reload_on_submit', 'S'], ['p_page_submission_id', salt], ['p_json', pJson],
+  ].map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+
+  const accept = await request(`${WZPDCL_BASE}/wwv_flow.accept?p_context=${ctx}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Content-Length': Buffer.byteLength(form),
+      'X-Requested-With': 'XMLHttpRequest',
+      Accept: 'application/json, text/javascript, */*; q=0.01',
+      Cookie: cookie,
+      Referer: WZPDCL_PAGE,
+    },
+    body: form,
+  });
+  let redirect;
+  try {
+    redirect = JSON.parse(accept.body).redirectURL;
+  } catch {
+    if (/protection violation/i.test(accept.body)) throw new Error('WZPDCL rejected the request, please try again');
+    throw new Error(`WZPDCL returned an unexpected response (HTTP ${accept.status})`);
+  }
+  if (!redirect) throw new Error('WZPDCL did not return a bill');
+
+  const result = await request(new URL(decode(redirect), `${WZPDCL_BASE}/`).href, { headers: { Cookie: cookie } });
+  const g = (id) => findInput(result.body, `id="P1009_${id}"`).trim();
+  const name = g('NAME');
+  if (!name) throw new Error('No bill found on WZPDCL for that account number');
+
+  return {
+    provider: 'WZPDCL',
+    postpaid: true,
+    name,
+    address: g('ADDR'),
+    phone: g('TELNO'),
+    accountNo: g('ACCNO') || accountNo,
+    meterNo: g('METER'),
+    balance: g('PAYABLEAMT'),
+    balanceLabel: 'Bill payable',
+    billPeriod: g('YMN') ? `Bill for ${g('YMN')}` : '',
+    details: clean({
+      "Father/Husband": g('FNAME'),
+      'Feeder': g('FDRNM'),
+      'Tariff': g('TTARIFF'),
+      'Type': g('BSTYPE'),
+      'Sanctioned load': g('SANLOAD'),
+      'Connected load': g('CONNLOAD'),
+      'Present reading': g('READING'),
+      'Previous reading': g('PREADING'),
+      'Units used': g('TUNIT'),
+      'Reading date': g('RDATE'),
+      'Issue date': g('ISUDATE'),
+      'Last pay date': g('LASTPAYDT'),
+      'Energy charge (৳)': g('NETPRICE'),
+      'Demand charge (৳)': g('DEM_CHRG'),
+      'VAT (৳)': g('VAT_AMT'),
+      'Gross (৳)': g('GRSPRICE'),
+      'Already paid (৳)': g('PAIDPRICE'),
+      'Bill no.': g('BILLNO'),
+    }),
+    tables: wzpdclLedger(result.body),
+  };
+}
+
 function clean(obj) {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== ''));
 }
@@ -880,6 +1007,16 @@ http
       if (no.length < 12 || no.length > 13) return send(res, 400, 'application/json', JSON.stringify({ error: 'BPDB meter numbers are at least 12 digits' }));
       try {
         return send(res, 200, 'application/json', JSON.stringify(await lookupBpdb(no)));
+      } catch (e) {
+        return send(res, 502, 'application/json', JSON.stringify({ error: e.message }));
+      }
+    }
+
+    if (url.pathname === '/api/wzpdcl') {
+      const no = (url.searchParams.get('no') || '').replace(/\D/g, '');
+      if (no.length < 6 || no.length > 14) return send(res, 400, 'application/json', JSON.stringify({ error: 'Enter a valid account number' }));
+      try {
+        return send(res, 200, 'application/json', JSON.stringify(await lookupWzpdcl(no)));
       } catch (e) {
         return send(res, 502, 'application/json', JSON.stringify({ error: e.message }));
       }
