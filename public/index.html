@@ -7,10 +7,10 @@
 <style>
   :root {
     --bg: #f6f7f9; --card: #fff; --text: #16181d; --muted: #6b7280; --line: #e5e7eb;
-    --desco: #0b6bcb; --nesco: #0f8a5f; --dpdc: #c2410c; --dwasa: #0e7490; --cwasa: #7c3aed; --accent: var(--desco); --bad: #c62828; --warn: #b26a00;
+    --desco: #0b6bcb; --nesco: #0f8a5f; --dpdc: #c2410c; --bpdb: #047857; --dwasa: #0e7490; --cwasa: #7c3aed; --accent: var(--desco); --bad: #c62828; --warn: #b26a00;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #0f1115; --card: #181b21; --text: #e8eaed; --muted: #9aa0a6; --line: #2a2e36; --desco: #4c9ef0; --nesco: #3cc48f; --dpdc: #f0814a; --dwasa: #22a7c4; --cwasa: #a07bf0; }
+    :root { --bg: #0f1115; --card: #181b21; --text: #e8eaed; --muted: #9aa0a6; --line: #2a2e36; --desco: #4c9ef0; --nesco: #3cc48f; --dpdc: #f0814a; --bpdb: #2bb784; --dwasa: #22a7c4; --cwasa: #a07bf0; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", "Noto Sans Bengali", sans-serif; }
@@ -32,7 +32,7 @@
   .err { color: var(--bad); margin-top: 10px; }
   .badge { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; color: #fff; }
   .badge.DESCO { background: var(--desco); } .badge.NESCO { background: var(--nesco); }
-  .badge.DPDC { background: var(--dpdc); } .badge.DWASA { background: var(--dwasa); } .badge.CWASA { background: var(--cwasa); }
+  .badge.DPDC { background: var(--dpdc); } .badge.BPDB { background: var(--bpdb); } .badge.DWASA { background: var(--dwasa); } .badge.CWASA { background: var(--cwasa); }
   .head { display: flex; justify-content: space-between; align-items: start; gap: 12px; flex-wrap: wrap; }
   .balance { font-size: 40px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; }
   .balance.low { color: var(--bad); }
@@ -71,6 +71,7 @@
       <button class="tab" data-p="desco" aria-pressed="true">DESCO</button>
       <button class="tab" data-p="nesco" aria-pressed="false">NESCO</button>
       <button class="tab" data-p="dpdc" aria-pressed="false">DPDC</button>
+      <button class="tab" data-p="bpdb" aria-pressed="false">BPDB</button>
       <button class="tab" data-p="dwasa" aria-pressed="false">Dhaka WASA</button>
       <button class="tab" data-p="cwasa" aria-pressed="false">Chattogram WASA</button>
     </div>
@@ -105,6 +106,7 @@
 const HINTS = {
   desco: 'DESCO: 8-digit account number or 11–12 digit meter number (prepaid.desco.org.bd).',
   nesco: 'NESCO: customer number or meter number (customer.nesco.gov.bd).',
+  bpdb: 'BPDB: the 12-digit meter number. Shows the meter\'s recharge tokens from BPDB\'s public token-check (web.bpdbprepaid.gov.bd).',
   dpdc: 'DPDC: 8-digit customer number and the code from the image. Shows the last prepaid recharge; DPDC does not show the balance here (dpdc.org.bd).',
   dwasa: 'Dhaka WASA: account number and your portal password (consumer-portal.dhakawasa.org). The password is not saved.',
   cwasa: 'Chattogram WASA: account number; keep "Latest bill" or choose a year and month (ebill.cwasabd.org).',
@@ -121,7 +123,7 @@ function setProvider(p) {
   $('pw').required = p === 'dwasa';
   $('year').hidden = $('mon').hidden = p !== 'cwasa';
   $('no').inputMode = p === 'cwasa' ? 'text' : 'numeric';
-  $('no').placeholder = p === 'dpdc' ? 'Customer number' : p === 'dwasa' || p === 'cwasa' ? 'Account number' : 'Account / meter number';
+  $('no').placeholder = p === 'dpdc' ? 'Customer number' : p === 'bpdb' ? '12-digit meter number' : p === 'dwasa' || p === 'cwasa' ? 'Account number' : 'Account / meter number';
   $('captchaBox').hidden = p !== 'dpdc';
   $('code').required = p === 'dpdc';
 }

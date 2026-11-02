@@ -1,4 +1,4 @@
-// DESCO, NESCO and DPDC electricity plus Dhaka and Chattogram WASA bills — one site, zero dependencies.
+// DESCO, NESCO, DPDC and BPDB electricity plus Dhaka and Chattogram WASA bills — one site, zero dependencies.
 // Run: node server.js   then open http://localhost:3002
 
 const http = require('http');
@@ -630,6 +630,146 @@ async function dwasaStatement(token, from, to) {
   return { ...session.profile, ...dwasaBills(found.columns.length ? found.columns : session.columns, found.rows), session: token, searchable: true, from, to };
 }
 
+// ----------------------------------------------------------------- BPDB ----
+// https://web.bpdbprepaid.gov.bd/bn/token-check is BPDB's public meter token check.
+// It needs only the 12-digit meter number — no captcha, no login. The page is a
+// Next.js app and the lookup is a server action, so we POST to it the way the page
+// does. The action id is a build hash that changes when BPDB redeploys, so it is
+// scraped from the page's script at runtime and cached, and re-scraped on failure.
+
+const BPDB_ORIGIN = 'https://web.bpdbprepaid.gov.bd';
+const BPDB_PAGE = `${BPDB_ORIGIN}/bn/token-check`;
+let bpdbActionId = null;
+
+async function bpdbActionIds() {
+  const page = await request(BPDB_PAGE);
+  const chunk = (page.body.match(/\/_next\/static\/chunks\/app\/[^"']*token-check\/page-[a-f0-9]+\.js/) || [])[0];
+  if (!chunk) return [];
+  const js = await request(BPDB_ORIGIN + chunk);
+  return [...new Set(js.body.match(/[a-f0-9]{40}/g) || [])];
+}
+
+async function bpdbCall(no, actionId) {
+  const body = JSON.stringify([{ meterNo: no }]);
+  return request(BPDB_PAGE, {
+    method: 'POST',
+    headers: {
+      Accept: 'text/x-component',
+      'Next-Action': actionId,
+      'Content-Type': 'text/plain;charset=UTF-8',
+      'Content-Length': Buffer.byteLength(body),
+    },
+    body,
+  });
+}
+
+// The action answers with a React Flight stream; the data is the one line that
+// parses to an object holding mCustomerData / mOrderData.
+function bpdbData(rsc) {
+  for (const line of rsc.split('\n')) {
+    const at = line.indexOf(':');
+    const rest = at === -1 ? '' : line.slice(at + 1).trim();
+    if (rest[0] !== '{') continue;
+    try {
+      const o = JSON.parse(rest);
+      if (o && (o.mCustomerData || o.mOrderData)) return o;
+    } catch {}
+  }
+  return null;
+}
+
+// The data is xml2js "compact" JSON: a found meter is under `result` with scalar
+// nodes shaped { _text: "value" }; a missing meter is under `xml` with only
+// `_attributes` (state/message). These helpers read either shape.
+const xjText = (n) => (n && typeof n === 'object' && n._text !== undefined ? decode(String(n._text)).trim() : '');
+const xjAttrs = (c) => Object.fromEntries(Object.entries((c && c._attributes) || {}).map(([k, v]) => [k, decode(String(v)).trim()]));
+const bpContainer = (node) => (node && (node.result || node.xml)) || {};
+// Scalar child fields of a result node (skips attributes and nested element groups).
+function xjScalars(c) {
+  const out = {};
+  for (const [k, v] of Object.entries(c || {})) {
+    if (k === '_attributes' || k === '_declaration') continue;
+    if (v && typeof v === 'object' && !('_text' in v) && Object.keys(v).length) continue; // nested group, e.g. orders
+    const t = xjText(v);
+    if (t) out[k] = t;
+  }
+  return out;
+}
+
+const pretty = (k) => k.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+
+function bpdbOrders(mOrderData) {
+  const list = bpContainer(mOrderData).orders && bpContainer(mOrderData).orders.order;
+  const arr = Array.isArray(list) ? list : list ? [list] : [];
+  return arr.map((o) => ({
+    Date: xjText(o.date),
+    Via: xjText(o.operator).replace(/^operator/i, ''),
+    'Gross (৳)': xjText(o.grossAmount),
+    'Energy (৳)': xjText(o.energyCost),
+    'Arrear (৳)': xjText(o.arrearRecovery),
+    Token: xjText(o.tokens),
+  }));
+}
+
+async function lookupBpdb(no) {
+  let data = null;
+  for (let attempt = 0; attempt < 2 && !data; attempt++) {
+    const ids = bpdbActionId ? [bpdbActionId] : await bpdbActionIds();
+    if (!ids.length) { bpdbActionId = null; continue; }
+    for (const id of ids) {
+      const res = await bpdbCall(no, id).catch(() => null);
+      if (res && res.status === 200) {
+        const o = bpdbData(res.body);
+        if (o) { data = o; bpdbActionId = id; break; }
+      }
+    }
+    if (!data) bpdbActionId = null; // cached id went stale: re-scrape next loop
+  }
+  if (!data) throw new Error('Could not reach BPDB token-check right now');
+
+  // A missing meter comes back under `xml` with a message and no customer record.
+  if (!(data.mCustomerData && data.mCustomerData.result)) {
+    const message = xjAttrs(bpContainer(data.mCustomerData)).message || xjAttrs(bpContainer(data.mOrderData)).message;
+    throw new Error(message || 'No meter found on BPDB for that number');
+  }
+
+  const cust = data.mCustomerData.result;
+  const attrs = xjAttrs(cust);
+  const f = xjScalars(cust);
+  const phone = (f.customerPhone || '').replace(/,+$/, '');
+  const balance = f.remainingBalance || f.lastRechargeAmount || '';
+  const balanceLabel = f.remainingBalance ? 'Balance' : f.lastRechargeAmount ? 'Last recharge' : '';
+
+  const labels = {
+    customerAccountNo: 'Customer no.', oldMeterNo: 'Old meter no.', sndDivision: 'S&D division', division: 'Division',
+    tariffCategory: 'Tariff', connectionCategory: 'Connection', accountType: 'Account type', meterType: 'Meter type',
+    sanctionLoad: 'Sanctioned load (kW)', lastRechargeTime: 'Last recharge time', totalRechargeThisMonth: 'Recharged this month (৳)',
+    installationDate: 'Installed', usedThisMonthKWH: 'Used this month (kWh)', usedThisMonthBDT: 'Used this month (৳)', readingTime: 'Reading time',
+  };
+  const shown = new Set(['customerName', 'customerAddress', 'customerPhone', 'meterNumber', 'meterNo', 'remainingBalance', 'lastRechargeAmount']);
+  const details = clean(Object.fromEntries(
+    Object.entries(f).filter(([k]) => !shown.has(k)).map(([k, v]) => [labels[k] || pretty(k), v.replace(/^Tariff\s*:\s*/i, '')]),
+  ));
+
+  const orders = bpdbOrders(data.mOrderData);
+  const columns = orders.length ? Object.keys(orders[0]) : [];
+  const tables = orders.length ? [[columns, ...orders.map((r) => Object.values(r))]] : [];
+
+  return {
+    provider: 'BPDB',
+    name: f.customerName || '',
+    address: f.customerAddress || '',
+    phone,
+    accountNo: f.customerAccountNo || attrs.customerNo || no,
+    meterNo: f.meterNumber || attrs.meterNo || no,
+    balance,
+    balanceLabel,
+    details,
+    tables,
+    summary: '',
+  };
+}
+
 function clean(obj) {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== ''));
 }
@@ -730,6 +870,16 @@ http
       }
       try {
         return send(res, 200, 'application/json', JSON.stringify(await dwasaStatement(String(session), from, to)));
+      } catch (e) {
+        return send(res, 502, 'application/json', JSON.stringify({ error: e.message }));
+      }
+    }
+
+    if (url.pathname === '/api/bpdb') {
+      const no = (url.searchParams.get('no') || '').replace(/\D/g, '');
+      if (no.length < 12 || no.length > 13) return send(res, 400, 'application/json', JSON.stringify({ error: 'BPDB meter numbers are at least 12 digits' }));
+      try {
+        return send(res, 200, 'application/json', JSON.stringify(await lookupBpdb(no)));
       } catch (e) {
         return send(res, 502, 'application/json', JSON.stringify({ error: e.message }));
       }
