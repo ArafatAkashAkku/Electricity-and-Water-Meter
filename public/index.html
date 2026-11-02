@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bidyut Balance</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #16181d; --muted: #6b7280; --line: #e5e7eb;
+    --desco: #0b6bcb; --nesco: #0f8a5f; --dwasa: #0e7490; --cwasa: #7c3aed; --accent: var(--desco); --bad: #c62828; --warn: #b26a00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1115; --card: #181b21; --text: #e8eaed; --muted: #9aa0a6; --line: #2a2e36; --desco: #4c9ef0; --nesco: #3cc48f; --dwasa: #22a7c4; --cwasa: #a07bf0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", "Noto Sans Bengali", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .tab { flex: 1 1 120px; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: transparent; color: var(--text); font-weight: 600; cursor: pointer; }
+  .tab[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  input { flex: 1 1 160px; min-width: 0; padding: 12px; font-size: 17px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); letter-spacing: .5px; }
+  select { flex: 1 1 110px; min-width: 0; padding: 12px; font-size: 15px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); color-scheme: light dark; }
+  select:disabled { opacity: .5; }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button.go { padding: 12px 18px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 600; font-size: 15px; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: wait; }
+  .hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+  .err { color: var(--bad); margin-top: 10px; }
+  .badge { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; color: #fff; }
+  .badge.DESCO { background: var(--desco); } .badge.NESCO { background: var(--nesco); }
+  .badge.DWASA { background: var(--dwasa); } .badge.CWASA { background: var(--cwasa); }
+  .head { display: flex; justify-content: space-between; align-items: start; gap: 12px; flex-wrap: wrap; }
+  .balance { font-size: 40px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .balance.low { color: var(--bad); }
+  .muted { color: var(--muted); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 16px; margin-top: 14px; }
+  .grid div span { display: block; color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .scroll { overflow-x: auto; }
+  .token { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+  .saved { display: flex; flex-direction: column; gap: 8px; }
+  .saved-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+  .saved-item:hover { border-color: var(--accent); }
+  .saved-item .no { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .saved-item .amt { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .link { background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; padding: 0; }
+  .x { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1; }
+  h2 { font-size: 15px; margin: 18px 0 4px; }
+  .dates { align-items: center; margin: 8px 0; }
+  .dates label { display: flex; flex: 1 1 200px; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  .dates input { font-size: 15px; padding: 9px 10px; color-scheme: light dark; }
+  .dates .go { padding: 9px 16px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Bidyut Balance</h1>
+  <p class="sub">DESCO, NESCO ও WASA — বিদ্যুৎ ও পানির হিসাব এক জায়গায়।</p>
+
+  <section class="card">
+    <div class="tabs" role="group" aria-label="Provider">
+      <button class="tab" data-p="desco" aria-pressed="true">DESCO</button>
+      <button class="tab" data-p="nesco" aria-pressed="false">NESCO</button>
+      <button class="tab" data-p="dwasa" aria-pressed="false">Dhaka WASA</button>
+      <button class="tab" data-p="cwasa" aria-pressed="false">Chattogram WASA</button>
+    </div>
+    <form class="row" id="form">
+      <input id="no" inputmode="numeric" autocomplete="off" placeholder="Account / meter number" required>
+      <input id="pw" type="password" autocomplete="off" placeholder="Password" aria-label="Dhaka WASA password" hidden>
+      <select id="year" aria-label="Bill year" hidden><option value="">Latest bill</option></select>
+      <select id="mon" aria-label="Bill month" disabled hidden><option value="">Month</option></select>
+      <button class="go" id="go">Check</button>
+    </form>
+    <p class="hint" id="hint"></p>
+    <div class="err" id="err" hidden></div>
+  </section>
+
+  <section id="result"></section>
+
+  <section class="card" id="savedCard" hidden>
+    <div class="head">
+      <strong>Saved meters</strong>
+      <button class="link" id="refreshAll">Refresh all</button>
+    </div>
+    <div class="saved" id="saved" style="margin-top:10px"></div>
+  </section>
+</main>
+
+<script>
+const HINTS = {
+  desco: 'DESCO: 8-digit account number or 11–12 digit meter number (prepaid.desco.org.bd).',
+  nesco: 'NESCO: customer number or meter number (customer.nesco.gov.bd).',
+  dwasa: 'Dhaka WASA: account number and your portal password (consumer-portal.dhakawasa.org). The password is not saved.',
+  cwasa: 'Chattogram WASA: account number; keep "Latest bill" or choose a year and month (ebill.cwasabd.org).',
+};
+let provider = 'desco';
+const $ = (id) => document.getElementById(id);
+
+function setProvider(p) {
+  provider = p;
+  document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-pressed', t.dataset.p === p));
+  document.documentElement.style.setProperty('--accent', `var(--${p})`);
+  $('hint').textContent = HINTS[p];
+  $('pw').hidden = p !== 'dwasa';
+  $('pw').required = p === 'dwasa';
+  $('year').hidden = $('mon').hidden = p !== 'cwasa';
+  $('no').inputMode = p === 'cwasa' ? 'text' : 'numeric';
+  $('no').placeholder = p === 'dwasa' || p === 'cwasa' ? 'Account number' : 'Account / meter number';
+}
+// Switching tabs starts fresh: clear the number, result, error and any lookup still in flight.
+function reset() {
+  lookupId++;
+  $('no').value = $('pw').value = $('year').value = $('mon').value = '';
+  $('mon').disabled = true;
+  $('mon').required = false;
+  $('result').innerHTML = '';
+  $('err').hidden = true;
+  $('go').disabled = false; $('go').textContent = 'Check';
+  $('no').focus();
+}
+document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => { setProvider(t.dataset.p); reset(); }));
+
+// Same range as the Chattogram WASA portal: 1988 to this year.
+for (let y = new Date().getFullYear(); y >= 1988; y--) $('year').add(new Option(y, y));
+['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+  .forEach((name, i) => $('mon').add(new Option(name, String(i + 1).padStart(2, '0'))));
+$('year').addEventListener('change', () => {
+  $('mon').disabled = !$('year').value;
+  $('mon').required = !!$('year').value;
+  if (!$('year').value) $('mon').value = '';
+});
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const num = (v) => parseFloat(String(v).replace(/[^\d.-]/g, ''));
+const money = (v) => (isNaN(num(v)) ? esc(v || '—') : '৳ ' + num(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+
+async function lookup(p, no, { password, month } = {}) {
+  const r = p === 'dwasa'
+    ? await fetch('/api/dwasa', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ no, password }) })
+    : await fetch(`/api/${p}?no=${encodeURIComponent(no)}${month ? `&month=${month}` : ''}`);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || 'Lookup failed');
+  return data;
+}
+
+function render(d) {
+  const low = !d.postpaid && num(d.balance) < 200;
+  const details = Object.entries(d.details || {}).map(([k, v]) => `<div><span>${esc(k)}</span>${esc(v)}</div>`).join('');
+  const usage = (d.usage || []).map((u) => `
+    <tr><td>${esc(u.month)}</td><td>${esc(u.unit)} kWh</td><td>${money(u.taka)}</td><td>${esc(u.maxDemand ?? '—')}</td></tr>`).join('');
+  $('result').innerHTML = `
+    <div class="card">
+      <div class="head">
+        <div>
+          <span class="badge ${d.provider}">${d.provider}</span>
+          <div style="font-weight:700;font-size:18px;margin-top:6px">${esc(d.name)}</div>
+          <div class="muted">${esc(d.address)}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="muted">${esc(d.balanceLabel || 'Remaining balance')}</div>
+          <div class="balance ${low ? 'low' : ''}">${money(d.balance)}</div>
+          ${d.balanceTime ? `<div class="muted">as of ${esc(d.balanceTime)}</div>` : ''}
+          ${d.billPeriod ? `<div class="muted">${esc(d.billPeriod)}</div>` : ''}
+        </div>
+      </div>
+      <div class="grid">
+        <div><span>Account / consumer no.</span>${esc(d.accountNo)}</div>
+        ${d.meterNo ? `<div><span>Meter no.</span>${esc(d.meterNo)}</div>` : ''}
+        ${d.phone ? `<div><span>Mobile</span>${esc(d.phone)}</div>` : ''}
+        ${details}
+      </div>
+      ${d.postpaid ? '' : `<h2>Recharge history</h2>
+      <div id="recharges">${d.rechargesPending
+        ? '<p class="muted">Loading recharge history… DESCO can take up to a minute.</p>'
+        : rechargeTable(d.recharges)}</div>`}
+      ${d.provider === 'DWASA' ? statementBlock(d) : ''}
+      ${usage ? `<h2>Monthly usage</h2><div class="scroll"><table>
+        <thead><tr><th>Month</th><th>Units</th><th>Cost</th><th>Max demand (kW)</th></tr></thead>
+        <tbody>${usage}</tbody></table></div>` : ''}
+    </div>`;
+  if ($('stmt')) $('stmt').addEventListener('submit', (e) => { e.preventDefault(); searchStatement(d); });
+  if (d.statementPending) searchStatement(d);
+}
+
+function statementBlock(d) {
+  const search = d.searchable ? `
+    <form class="row dates" id="stmt">
+      <label>From <input type="date" id="from" value="${esc(d.from)}" required></label>
+      <label>To <input type="date" id="to" value="${esc(d.to)}" required></label>
+      <button class="go" id="stmtGo">Search</button>
+    </form>
+    <div class="err" id="stmtErr" hidden></div>` : '<p class="muted">Date search is not available for this account right now.</p>';
+  const bills = d.rows.length ? billTable([d.columns, ...d.rows]) : '<p class="muted">No bills found for these dates.</p>';
+  return `<h2>Account statement</h2>${search}<div id="stmtBody">${d.statementPending ? '' : bills}</div>`;
+}
+
+async function searchStatement(d) {
+  const id = lookupId;
+  $('stmtErr').hidden = true;
+  $('stmtGo').disabled = true; $('stmtGo').textContent = 'Searching…';
+  $('stmtBody').innerHTML = '<p class="muted">Loading bills… Dhaka WASA can take up to 5 minutes.</p>';
+  try {
+    const r = await fetch('/api/dwasa/statement', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session: d.session, from: $('from').value, to: $('to').value }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Search failed');
+    if (id === lookupId) render(data);
+  } catch (e) {
+    if (id !== lookupId) return;
+    $('stmtBody').innerHTML = '';
+    $('stmtErr').textContent = e.message;
+    $('stmtErr').hidden = false;
+    $('stmtGo').disabled = false; $('stmtGo').textContent = 'Search';
+  }
+}
+
+function billTable(rows) {
+  const [head, ...body] = rows;
+  const cells = (row, tag) => row.map((c) => `<${tag}>${esc(c)}</${tag}>`).join('');
+  return `<div class="scroll"><table><thead><tr>${cells(head, 'th')}</tr></thead>
+    <tbody>${body.map((r) => `<tr>${cells(r, 'td')}</tr>`).join('')}</tbody></table></div>`;
+}
+
+function rechargeTable(list) {
+  if (!list || !list.length) return '<p class="muted">No recharges found.</p>';
+  const rows = list.map((r) => `
+    <tr><td>${esc(r.date)}</td><td><strong>${money(r.amount)}</strong></td><td>${money(r.energy)}</td><td>${money(r.vat)}</td>
+      <td>${money(r.rebate)}</td><td class="muted">${esc(r.charges || '—')}</td><td>${esc(r.method || '—')}</td>
+      <td>${esc(r.status || '—')}</td><td class="token">${esc(r.token)}</td></tr>`).join('');
+  return `<div class="scroll"><table>
+    <thead><tr><th>Date</th><th>Amount</th><th>Energy</th><th>VAT</th><th>Rebate</th><th>Other charges</th><th>Via</th><th>Status</th><th>Token</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+let lookupId = 0;
+async function loadDescoRecharges(d, id) {
+  let html;
+  try {
+    const r = await fetch(`/api/desco/recharges?account=${encodeURIComponent(d.accountNo)}&meter=${encodeURIComponent(d.meterNo)}`);
+    const list = await r.json();
+    if (!r.ok) throw new Error(list.error || 'Could not load recharge history');
+    html = rechargeTable(list);
+  } catch (e) {
+    html = `<p class="err">${esc(e.message)}</p>`;
+  }
+  // Ignore if the user has looked up another meter meanwhile.
+  if (id === lookupId && $('recharges')) $('recharges').innerHTML = html;
+}
+
+// ---- saved meters (this browser only) ----
+const KEY = 'bidyut.saved';
+const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } };
+const store = (list) => { try { localStorage.setItem(KEY, JSON.stringify(list)); } catch {} };
+
+function remember(p, no, d) {
+  if (p === 'dwasa') return; // needs a password every time, which is never kept
+  const list = load().filter((s) => !(s.p === p && s.no === no));
+  list.unshift({ p, no, name: d.name, balance: d.balance, at: Date.now() });
+  store(list.slice(0, 12));
+  drawSaved();
+}
+
+function drawSaved() {
+  const list = load();
+  $('savedCard').hidden = !list.length;
+  $('saved').innerHTML = list.map((s, i) => `
+    <div class="saved-item" data-i="${i}">
+      <span class="badge ${s.p.toUpperCase()}">${s.p.toUpperCase()}</span>
+      <span class="no">${esc(s.no)}<span class="muted"> · ${esc(s.name || '')}</span></span>
+      <span class="amt">${s.error ? '<span class="muted">error</span>' : money(s.balance)}</span>
+      <button class="x" data-del="${i}" aria-label="Remove">×</button>
+    </div>`).join('');
+}
+
+$('saved').addEventListener('click', (e) => {
+  const list = load();
+  if (e.target.dataset.del) { list.splice(+e.target.dataset.del, 1); store(list); return drawSaved(); }
+  const item = e.target.closest('.saved-item');
+  if (!item) return;
+  const s = list[+item.dataset.i];
+  setProvider(s.p);
+  $('no').value = s.no;
+  check();
+});
+
+$('refreshAll').addEventListener('click', async () => {
+  $('refreshAll').disabled = true;
+  const list = load();
+  await Promise.all(list.map(async (s) => {
+    try { const d = await lookup(s.p, s.no); Object.assign(s, { name: d.name, balance: d.balance, error: false, at: Date.now() }); }
+    catch { s.error = true; }
+  }));
+  store(list); drawSaved();
+  $('refreshAll').disabled = false;
+});
+
+async function check() {
+  const p = provider;
+  const no = $('no').value.replace(p === 'cwasa' ? /[^A-Za-z0-9]/g : /\D/g, '');
+  const password = $('pw').value;
+  if (!no || (p === 'dwasa' && !password)) return;
+  $('pw').value = '';
+  $('err').hidden = true;
+  $('go').disabled = true; $('go').textContent = 'Checking…';
+  const id = ++lookupId;
+  try {
+    const month = p === 'cwasa' && $('year').value ? `${$('year').value}-${$('mon').value}` : '';
+    const d = await lookup(p, no, { password, month });
+    if (id !== lookupId) return;
+    render(d);
+    if (!month) remember(p, no, d); // an old bill must not replace the saved amount
+    if (d.rechargesPending) loadDescoRecharges(d, id);
+  } catch (e) {
+    if (id !== lookupId) return;
+    $('result').innerHTML = '';
+    $('err').textContent = e.message;
+    $('err').hidden = false;
+  } finally {
+    if (id === lookupId) { $('go').disabled = false; $('go').textContent = 'Check'; }
+  }
+}
+
+$('form').addEventListener('submit', (e) => { e.preventDefault(); check(); });
+setProvider('desco');
+drawSaved();
+</script>
+</body>
+</html>
